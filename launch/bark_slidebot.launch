@@ -1,0 +1,14 @@
+<launch>
+  <include file="$(find ur16e_moveit_config)/launch/demo.launch">
+    <arg name="use_rviz" value="false"/>
+  </include>
+
+  <include file="$(find yolo_bounding_box_detection)/launch/yolo_detection_server.launch">
+  </include>
+
+  <rosparam command="load" file="$(find bark_slidebot)/config/configs.yaml" />
+  <!-- Start the actual detection server -->
+  <node name="bark_slidebot" pkg="bark_slidebot" type="bark_slidebot.py" respawn="false" output="screen">
+  </node>
+
+</launch>
