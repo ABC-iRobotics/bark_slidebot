@@ -1,5 +1,7 @@
 <launch>
-  <include file="$(find ur16e_moveit_config)/launch/demo.launch"></include>
+  <include file="$(find ur16e_moveit_config)/launch/demo.launch">
+    <arg name="pipeline" value="ompl" />
+  </include>
 
   <include file="$(find yolo_bounding_box_detection)/launch/yolo_detection_server.launch"></include>
 
