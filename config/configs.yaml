@@ -1,2 +1,5 @@
 bark_slidebot_config:
   photo_jpose: [0.0003180853964295238, -1.509143666630127, 1.9175460974322718, -1.9791599712767542, -1.5711048285113733, -3.142313067113058]  # joint variables
+  object_in_world_frame: []
+  camera_in_tcp_frame: [-0.032, -0.039, 0.08, 0, 0, -3.14159265]
+  tcp_in_robot_eef_frame: [0, 0, 0.148, 0, 0, 0]

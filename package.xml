@@ -79,6 +79,12 @@
   <build_depend>bark_msgs</build_depend>
   <build_export_depend>bark_msgs</build_export_depend>
   <exec_depend>bark_msgs</exec_depend>
+  <build_depend>tf</build_depend>
+  <build_export_depend>tf</build_export_depend>
+  <exec_depend>tf</exec_depend>
+  <build_depend>tf2_ros</build_depend>
+  <build_export_depend>tf2_ros</build_export_depend>
+  <exec_depend>tf2_ros</exec_depend>
 
 
 

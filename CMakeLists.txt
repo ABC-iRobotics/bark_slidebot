@@ -20,6 +20,8 @@ find_package(catkin REQUIRED COMPONENTS
   cv_bridge
   vision_msgs
   bark_msgs
+  tf
+  tf2_ros
 )
 
 ## Uncomment this if the package has a setup.py. This macro ensures
@@ -166,6 +168,7 @@ include_directories(
 ## in contrast to setup.py, you can choose the destination
 catkin_install_python(PROGRAMS
   scripts/bark_slidebot.py
+  scripts/publish_config_poses_to_tf.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
