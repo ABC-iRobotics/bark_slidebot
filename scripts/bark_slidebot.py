@@ -54,8 +54,10 @@ import geometry_msgs.msg
 from std_msgs.msg import String
 from moveit_commander.conversions import pose_to_list
 from sensor_msgs.msg import JointState
+import copy
 
 import tf
+import tf2_ros
 import sys
 import copy
 import os
@@ -99,6 +101,8 @@ class BarkSlidebot:
         self.bridge = CvBridge()
 
         self.tf_listener = tf.TransformListener()
+
+        self.static_tf_broadcaster = tf2_ros.StaticTransformBroadcaster()
     
     def print_configs(self):
         rospy.loginfo(self.configs)
@@ -122,7 +126,7 @@ class BarkSlidebot:
         goal.image = self.bridge.cv2_to_imgmsg(img, encoding='bgr8')
         # Fill in the goal here
         self.bbox_client.send_goal(goal)
-        self.bbox_client.wait_for_result(rospy.Duration.from_sec(5.0))
+        self.bbox_client.wait_for_result(rospy.Duration.from_sec(10.0))
         return self.bbox_client.get_result()
 
     def deproject_2d_points_to_3d(self, points):
@@ -186,9 +190,19 @@ class BarkSlidebot:
         pose_goal.position = geometry_msgs.msg.Point(*trans)
         pose_goal.orientation = geometry_msgs.msg.Quaternion(*rot)
 
-        success, plan_trajectory, planning_time, error_code = self.group.plan(pose_goal)
-        if success:
-                self.group.execute(plan_trajectory, wait = True)
+        waypoints = []
+        waypoints.append(self.group.get_current_pose().pose)
+        waypoints.append(copy.deepcopy(pose_goal))
+
+        (plan_trajectory, fraction) = self.group.compute_cartesian_path(
+                             waypoints,   # waypoints to follow
+                             0.01,        # eef_step
+                             0.0)         # jump_threshold
+
+        input("Trajectory computation to target pose finished, observe the result trajectory and press ENTER!")
+
+        if fraction == 1:
+            self.group.execute(plan_trajectory, wait = True)
 
     def lookup_transform(self, parent, child):
         if self.tf_listener.frameExists(parent) and self.tf_listener.frameExists(child):
@@ -230,21 +244,36 @@ if __name__=="__main__":
 
     input("Moving to photo pose, press ENTER to continue!")
     bark_slidebot.move_to_joint_pose("photo_jpose")
-    camera_z = bark_slidebot.lookup_transform("base", "camera")[0][2]
-    print("camera_z: ", camera_z)
 
     input("Take a photo, press ENTER to continue!")
     img = cv2.imread(os.path.join(rospackage_root, '..', '4_Color.png'))
 
     input("Predict bounding box, press ENTER to continue!")
-    bbox_detection_result = bark_slidebot.bbox_prediction(img)
+    # THE IMAGE HAS TO BE RESIZED TO THE RESOLUTION THAT WAS USED DURING THE CALIBRATION!!!!!!!!!!!!!!! CALIBRATION RES: 1280x720
+    resized_img = cv2.resize(img, (1280,720), interpolation= cv2.INTER_LINEAR)
+
+    bbox_detection_result = bark_slidebot.bbox_prediction(resized_img)
     bbox = bbox_detection_result.detections.detections[0].bbox
     print("x: ", bbox.center.x, "y: ", bbox.center.y, "size_x: ", bbox.size_x, "size_y: ", bbox.size_y)
 
-    deprojection_result = bark_slidebot.deproject_2d_points_to_3d([[bbox.center.x, bbox.center.x, camera_z]])
+    camera_z = bark_slidebot.lookup_transform("base", "camera")[0][2]
+    print("camera_z: ", camera_z)
+    # Deprojected point is in the "base" frame
+    deprojection_result = bark_slidebot.deproject_2d_points_to_3d([[bbox.center.x, bbox.center.y, camera_z]])
     bbox_centerpoint_3d = deprojection_result.points[0]
-    bbox_centerpoint_3d.z += 0.3
-    print("bbox_centerpoint_3d: ", bbox_centerpoint_3d)
+
+    bbox_static_transform = geometry_msgs.msg.TransformStamped()
+    bbox_static_transform.header.frame_id = 'base_link'
+    bbox_static_transform.child_frame_id = 'predicted_object_pose'
+    bbox_static_transform.transform.translation.x = -bbox_centerpoint_3d.x
+    bbox_static_transform.transform.translation.y = -bbox_centerpoint_3d.y
+    bbox_static_transform.transform.translation.z = bbox_centerpoint_3d.z
+    bbox_static_transform.transform.rotation.w = 1
+    bark_slidebot.static_tf_broadcaster.sendTransform(bbox_static_transform)
+
+    bbox_centerpoint_3d.z += 0.4
+    print("above_bbox_centerpoint_3d: ", bbox_centerpoint_3d)
+
 
     rot = bark_slidebot.lookup_transform("base", "camera")[1]
     target_pose = geometry_msgs.msg.PoseStamped()
