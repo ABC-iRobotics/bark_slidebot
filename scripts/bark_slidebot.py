@@ -1,5 +1,8 @@
 #! /usr/bin/env python
 
+##  @package bark_slidebot
+#   The main program of Slidebot project.
+
 import rospy
 import moveit_commander
 import rospkg
@@ -27,10 +30,15 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from PIL import Image
 
+##
+#   Class for picking up glass slides.
 class BarkSlidebot:
     '''
     Class for picking up glass slides.
     '''
+
+    ##  Constructor of BarkSlidebot class.
+    #   @param group_name Name of the group. Representation of a set of joints and links. It comes from .srdf file of the robot.
     def __init__(self, group_name="manipulator"):
         '''
         Constructor of BarkSlidebot class
@@ -88,13 +96,16 @@ class BarkSlidebot:
         ## Add table to robot scene
         self.scene.add_box("table", table_pose_stamped, (2, 2, 0.05))
       
-    
+    ##  Prints the elements from config file.
+    #   @param self The object pointer.
     def print_configs(self):
         '''
         Prints the elements from config file.
         '''
         rospy.loginfo(self.configs)
 
+    ##  Moves the robot to a specified joint pose.
+    #   @param pose_name Name of the pose where move the robot. The joint variables come from the config file by name.
     def move_to_joint_pose(self, pose_name):
         '''
         Moves the robot to a specified joint pose.
@@ -114,12 +125,15 @@ class BarkSlidebot:
             if success:
                 self.group.execute(plan_trajectory, wait = True)
 
+    ##  Predicts the bounding box of slide holder box.
+    #   @param img The image on which we want to predict.
+    #   @return Detected objects in an array.
     def bbox_prediction(self, img):
         '''
         Predicts the bounding box of slide holder box.
 
         Arguments:
-            - img (cv::Mat): OpenCV image
+            - img (cv::Mat): OpenCV image. We want to predict on this image.
         
         Returns:
             - (vision_msgs/Detection2DArray): detected objects in an array
@@ -134,6 +148,9 @@ class BarkSlidebot:
 
         return self.bbox_client.get_result()
 
+    ##  Deprojects 2D points to 3D in the robot base frame.
+    #   @param points List of x, y, z coordinates of the points. The x, y points are given in pixel unit and z is given in meter.
+    #   @return List of deprojected points. The points are given in meter.
     def deproject_2d_points_to_3d(self, points):
         '''
         Deprojects 2D points to 3D in the robot base frame.
@@ -163,6 +180,8 @@ class BarkSlidebot:
         return self.camera_projections_client.get_result()
 
 
+    ##  Moves the specified frame to the specified position.
+    #   @param pose The frame is specified in header.frame_id of PoseStamped and the position and orientation in pose of PoseStamped.
     def move_to_pose_with_frame(self, pose):
         '''
         Moves the specified frame to the specified position.
@@ -221,6 +240,12 @@ class BarkSlidebot:
         if fraction == 1:
             self.group.execute(plan_trajectory, wait = True)
 
+    ##  Gives the translation and orientation of child frame in parent frame.
+    #   @param parent Name of the parent frame.
+    #   @param child Name of the child frame.
+    #   @return trans The translation (x, y, z in meter) of child frame in parent frame.
+    #   @return rot The orientation of child frame in parent frame represented in quaternion (x, y, z, w).
+    #   @return Retruns 'None' if the parent or child frame is not exist.
     def lookup_transform(self, parent, child):
         '''
         Gives the translation and orientation of child frame in parent frame.
@@ -240,6 +265,8 @@ class BarkSlidebot:
         else:
             return None
 
+    ##  Enables joint contrains for robot.
+    #   @param self The object pointer.
     def enable_joint_constraints(self):
         '''
         Enables joint contrains for robot.
@@ -262,18 +289,23 @@ class BarkSlidebot:
 
         self.group.set_path_constraints(constraints)
 
+    ##  Disables joint contrains for robot.
+    #   @param self The object pointer.
     def disable_joint_constraints(self):
         '''
         Disables joint contrains for robot.
         '''
         self.group.set_path_constraints(None)
 
+    ##  Gets image from Raspberry Pi camera.
+    #   @param self The object pointer.
+    #   @return The captured image.
     def get_image(self):
         '''
         Gets image from Raspberry Pi camera.
 
         Returns:
-            - (cv::Mat): OpenCV image.
+            - (cv::Mat): OpenCV image. The captured image.
         '''
         ## Instantiate the goal
         goal = RaspberryPiCameraGoal()
@@ -283,12 +315,15 @@ class BarkSlidebot:
 
         return self.bridge.imgmsg_to_cv2(self.camera_client.get_result().image, "bgr8")
 
+    ##  Gives the translation and orientation of child frame in parent frame.
+    #   @param image The image on which we want to calculate the orientation.
+    #   @return The angle between the bottom of the image and the box in degrees.
     def orient_correction(self, image):
         '''
         Gives the translation and orientation of child frame in parent frame.
 
         Arguments:
-            - image (cv::Mat): OpenCV image.
+            - image (cv::Mat): OpenCV image. The image on which we want to calculate the orientation.
         
         Returns:
             - (float32): angle between the bottom of the image and the box in degrees.
@@ -303,13 +338,16 @@ class BarkSlidebot:
 
         return self.orient_client.get_result()
 
+    ##  Turns on or off the laser and sets its angle.
+    #   @param on Turn on or off the laser.
+    #   @param angle The angle of the laser.
     def laser_modul_request(self, on, angle):
         '''
-        Turns on or off the laser, and set its angle.
+        Turns on or off the laser and sets its angle.
 
         Arguments:
-            - on (bool): turn on or off the laser.
-            - angle (float32): angle of the laser.
+            - on (bool): turns on or off the laser.
+            - angle (float32): the angle of the laser.
         '''
         ## Instantiate the goal
         goal = LaserModulGoal()
@@ -321,6 +359,11 @@ class BarkSlidebot:
 
         return None
 
+    ##  Detects the glass slides in the box.
+    #   @param img_no_laser Image without laser.
+    #   @param img_laser Image with laser.
+    #   @param bbox The bounding box parameters.
+    #   @return The poses of the slides.
     def slide_detection(self, img_no_laser, img_laser, bbox):
         '''
         Detects the glass slides in the box.
@@ -345,6 +388,10 @@ class BarkSlidebot:
 
         return self.slide_detection_client.get_result()
 
+    ##  Sets the digital I/O of robot.
+    #   @param pin The number of digital I/O.
+    #   @param state The value of digital I/O.
+    #   @return Returns True if the setting was successfull and returns False if it failed.
     def set_io(self, pin, state):
         '''
         Sets the digital I/O of robot.
@@ -352,18 +399,23 @@ class BarkSlidebot:
         Arguments:
             - pin (int): number of digital I/O
             - state (bool): value of digital I/O
+        
+        Returns:
+            - (bool): Returns True if the setting was successfull and returns False if it failed.
         '''
         if self.using_io_client:
             return self.set_io_client(1, pin, state)
         else:
             return False
 
+    ##  Moves the robot TCP relative.
+    #   @param xyz_relative_movement Relative movement of robot TCP.
     def move_relative(self, xyz_relative_movement):
         '''
         Moves the robot TCP relative.
 
         Arguments:
-            - xyz_relative_movement (list[float]): relative movement of robot TCP
+            - xyz_relative_movement (list): relative movement of robot TCP
         '''
         waypoints = []
         start_pose = self.group.get_current_pose().pose
@@ -383,7 +435,6 @@ class BarkSlidebot:
 
         if fraction == 1:
             self.group.execute(plan_trajectory, wait = True)
-
 
 if __name__=="__main__":
     moveit_commander.roscpp_initialize(sys.argv)
