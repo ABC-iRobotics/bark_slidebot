@@ -1,7 +1,9 @@
 #! /usr/bin/env python
 
 ##  @package bark_slidebot
-#   The main program of Slidebot project.
+# The main ROS node for the SlideBot project
+#
+# Defines the slide picking process
 
 import rospy
 import moveit_commander
@@ -30,41 +32,67 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from PIL import Image
 
-##
-#   Class for picking up glass slides.
+## BarkSlidebot class
+#
+#  Defines the slide picking process
 class BarkSlidebot:
     '''
-    Class for picking up glass slides.
+    Class for picking up glass slides
     '''
 
-    ##  Constructor of BarkSlidebot class.
-    #   @param group_name Name of the group. Representation of a set of joints and links. It comes from .srdf file of the robot.
+    ##  Constructor of BarkSlidebot class
+    #   @param group_name string type name of the MoveIt move_group of the robot (defined in the srdf file of the robot's moveit_config package)
     def __init__(self, group_name="manipulator"):
         '''
         Constructor of BarkSlidebot class
 
         Arguments:
-         - group_name (string): name of the group. Representation of a set of joints and links. It comes from .srdf file of the robot.
+         - group_name (string): name of the MoveIt move_group of the robot (defined in the srdf file of the robot's moveit_config package)
         '''
-        ## Instantiate a RobotCommander object. This object is the outer-level interface to the robot
+        ## @var robot
+        #  moveit_commander.RobotCommander() object for accessing robot infos such as planning frame
         self.robot = moveit_commander.RobotCommander()
         
-        ## Instantiate a PlanningSceneInterface object.  This object is an interface to the world surrounding the robot
+        ## @var scene
+        #  moveit_commander.PlanningSceneInterface() object for manipulating the scene (e.g. adding collision objects)
         self.scene = moveit_commander.PlanningSceneInterface()
         
-        ## Specify the group name for which to construct this commander instance
+        ## @var group_name
+        #  name of move group
         self.group_name = group_name
+
+        ## @var group
+        #  Move group object
         self.group = moveit_commander.MoveGroupCommander(self.group_name)
         rospy.sleep(0.5)
 
+        ## @var configs
+        #  Configurations loaded from the parameter server ("bark_slidebot_config" param) they are loaded to the parameter server by the launch file in this repository from the config file in the config folder of this repository
         self.configs = rospy.get_param("/bark_slidebot_config")
 
-        ## Instantiate the clients
+
+        ## @var bbox_client
+        #  Client for the BoundingBoxDetectionAction action
         self.bbox_client = actionlib.SimpleActionClient('bounding_box_detection', BoundingBoxDetectionAction)
+
+        ## @var camera_projections_client
+        #  Client for the CameraProjectionsAction action
         self.camera_projections_client = actionlib.SimpleActionClient('camera_projections', CameraProjectionsAction)
+
+        ## @var camera_client
+        #  Client for the RaspberryPiCameraAction action
         self.camera_client = actionlib.SimpleActionClient('raspberry_pi_camera', RaspberryPiCameraAction)
+
+        ## @var orient_client
+        #  Client for the OrientCorrectionAction action
         self.orient_client = actionlib.SimpleActionClient('orient_correction', OrientCorrectionAction)
+
+        ## @var laser_modul_client
+        #  Client for the LaserModulAction action
         self.laser_modul_client = actionlib.SimpleActionClient('laser_modul', LaserModulAction)
+
+        ## @var slide_detection_client
+        #  Client for the SlideDetectionAction action
         self.slide_detection_client = actionlib.SimpleActionClient('slide_detection', SlideDetectionAction)
 
         ## Wait for response of the server
@@ -74,18 +102,30 @@ class BarkSlidebot:
         self.camera_projections_client.wait_for_server()
         self.camera_client.wait_for_server()
 
+
+        ## @var bridge
+        #  CvBridge() object for conversions between numpy arrays and ROS Image message types
         self.bridge = CvBridge()
 
-        ## Instantiate IO client 
+        ## @var set_io_client
+        #  ROS service client for the /ur_hardware_interface/set_io service (for opening and closing the gripper)
         self.set_io_client = rospy.ServiceProxy('/ur_hardware_interface/set_io', SetIO)
         try:
             self.set_io_client.wait_for_service(timeout=None)
+            ## @var using_io_client
+            #  Boolean flag wheter connecting to the /ur_hardware_interface/set_io service was successful
             self.using_io_client = True
         except rospy.exceptions.ROSException:
             rospy.logerr("Could not reach SetIO service. Make sure that the driver is actually running.")
             self.using_io_client = False
 
+
+        ## @var tf_listener
+        #  tf.TransformListener(), Used for looking up transformations from tf
         self.tf_listener = tf.TransformListener()
+
+        ## @var static_tf_broadcaster
+        #  tf2_ros.StaticTransformBroadcaster(), Used for visualizing static frames (target Chartesian poses)
         self.static_tf_broadcaster = tf2_ros.StaticTransformBroadcaster()
 
         ## Define table to robot
@@ -96,22 +136,23 @@ class BarkSlidebot:
         ## Add table to robot scene
         self.scene.add_box("table", table_pose_stamped, (2, 2, 0.05))
       
-    ##  Prints the elements from config file.
-    #   @param self The object pointer.
+    ##  Print configs
+    #   Prints the elements from config file
     def print_configs(self):
         '''
-        Prints the elements from config file.
+        Prints the elements from config file
         '''
         rospy.loginfo(self.configs)
 
-    ##  Moves the robot to a specified joint pose.
-    #   @param pose_name Name of the pose where move the robot. The joint variables come from the config file by name.
+    ##  Move to joint pose
+    #   Moves the robot to a specified joint pose
+    #   @param pose_name string type name of the pose where move the robot, (named joint poses are defined in the configs)
     def move_to_joint_pose(self, pose_name):
         '''
-        Moves the robot to a specified joint pose.
+        Moves the robot to a specified joint pose
 
         Arguments:
-         - pose_name (string): name of the pose where move the robot. The joint variables come from the config file by name.
+         - pose_name (string): name of the pose where move the robot. The joint variables come from the config file by name
         '''
         photo_pose = self.configs[pose_name]
 
@@ -125,43 +166,45 @@ class BarkSlidebot:
             if success:
                 self.group.execute(plan_trajectory, wait = True)
 
-    ##  Predicts the bounding box of slide holder box.
-    #   @param img The image on which we want to predict.
-    #   @return Detected objects in an array.
+    ##  Predict bounding box
+    #   Predicts the bounding box of slide holder box
+    #   @param img numpy array type image on which we want to predict
+    #   @return bark_msgs/BoundingBoxDetectionResult type detections
     def bbox_prediction(self, img):
         '''
-        Predicts the bounding box of slide holder box.
+        Predicts the bounding box of slide holder box
 
         Arguments:
-            - img (cv::Mat): OpenCV image. We want to predict on this image.
+            - img (cv::Mat): OpenCV image. We want to predict on this image
         
         Returns:
             - (vision_msgs/Detection2DArray): detected objects in an array
         '''
-        ## Instantiate the goal
+        # Instantiate the goal
         goal = BoundingBoxDetectionGoal()
-        ## Convert OpenCV image to ROS image
+        # Convert OpenCV image to ROS image
         goal.image = self.bridge.cv2_to_imgmsg(img, encoding='bgr8')
-        ## Send the goal and wait for the result
+        # Send the goal and wait for the result
         self.bbox_client.send_goal(goal)
         self.bbox_client.wait_for_result(rospy.Duration.from_sec(10.0))
 
         return self.bbox_client.get_result()
 
-    ##  Deprojects 2D points to 3D in the robot base frame.
-    #   @param points List of x, y, z coordinates of the points. The x, y points are given in pixel unit and z is given in meter.
-    #   @return List of deprojected points. The points are given in meter.
+    ##  Deproject 2D point to 3D
+    #   Deprojects 2D points to 3D in the robot base frame
+    #   @param points (list[list]) type x, y, z coordinates of the points. The x, y points are given in pixel unit and z is given in meter
+    #   @return geometry_msgs/Point[] type deprojected points. The points are given in meter
     def deproject_2d_points_to_3d(self, points):
         '''
-        Deprojects 2D points to 3D in the robot base frame.
+        Deprojects 2D points to 3D in the robot base frame
 
         Arguments:
-            - points (list[list]): list of x, y, z coordinates of the points. The x, y points are given in pixel unit and z is given in meter.
+            - points (list[list]): list of x, y, z coordinates of the points. The x, y points are given in pixel unit and z is given in meter
         
         Returns:
-            - (geometry_msgs/Point[]): list of deprojected points. The points are given in meter.
+            - (geometry_msgs/Point[]): list of deprojected points. The points are given in meter
         '''
-        ## Instantiate the goal
+        # Instantiate the goal
         goal = CameraProjectionsGoal()
         goal.space_type = goal.IMAGE_2D
         goal.header.frame_id = "base"
@@ -173,23 +216,24 @@ class BarkSlidebot:
             p.z = point[2]
             goal.points.append(p)
         
-        ## Send the goal and wait for the result
+        # Send the goal and wait for the result
         self.camera_projections_client.send_goal(goal)
         self.camera_projections_client.wait_for_result(rospy.Duration.from_sec(5.0))
 
         return self.camera_projections_client.get_result()
 
 
-    ##  Moves the specified frame to the specified position.
-    #   @param pose The frame is specified in header.frame_id of PoseStamped and the position and orientation in pose of PoseStamped.
+    ##  Move to pose with frame
+    #   Moves the specified frame to the specified position
+    #   @param pose geometry_msgs/PoseStamped type, the frame is specified in header.frame_id of PoseStamped and the position and orientation in pose of PoseStamped
     def move_to_pose_with_frame(self, pose):
         '''
-        Moves the specified frame to the specified position.
+        Moves the specified frame to the specified position
 
         Arguments:
-            - pose (geometry_msgs/PoseStamped): The frame is specified in header.frame_id of PoseStamped and the position and orientation in pose of PoseStamped.
+            - pose (geometry_msgs/PoseStamped): The frame is specified in header.frame_id of PoseStamped and the position and orientation in pose of PoseStamped
         '''
-        ## We can get the name of the reference frame for this robot:
+        # We can get the name of the reference frame for this robot:
         transformer = tf.Transformer(True, rospy.Duration(10.0))
         transform = geometry_msgs.msg.TransformStamped()
         transform.header.frame_id = "world"
@@ -240,15 +284,16 @@ class BarkSlidebot:
         if fraction == 1:
             self.group.execute(plan_trajectory, wait = True)
 
-    ##  Gives the translation and orientation of child frame in parent frame.
-    #   @param parent Name of the parent frame.
-    #   @param child Name of the child frame.
-    #   @return trans The translation (x, y, z in meter) of child frame in parent frame.
-    #   @return rot The orientation of child frame in parent frame represented in quaternion (x, y, z, w).
-    #   @return Retruns 'None' if the parent or child frame is not exist.
+    ##  Lookup transform
+    #   Gives the translation and orientation of child frame in parent frame
+    #   @param parent string type name of the parent frame
+    #   @param child string type name of the child frame
+    #   @return trans list type translation (x, y, z in meter) of child frame in parent frame
+    #   @return rot quaternion type orientation of child frame in parent frame (quaternion: (x, y, z, w))
+    #   @return 'None' if the parent or child frame do not exist
     def lookup_transform(self, parent, child):
         '''
-        Gives the translation and orientation of child frame in parent frame.
+        Gives the translation and orientation of child frame in parent frame
 
         Arguments:
             - parent, child (string): name of the parent and child frames
@@ -256,7 +301,7 @@ class BarkSlidebot:
         Returns:
             - trans (list): the translation (x, y, z in meter) of child frame in parent frame
             - rot (quaternion): the orientation of child frame in parent frame represented in quaternion (x, y, z, w)
-            - Retruns 'None' if the parent or child frame is not exist.
+            - Retruns 'None' if the parent or child frame do not exist
         '''
         if self.tf_listener.frameExists(parent) and self.tf_listener.frameExists(child):
             t = self.tf_listener.getLatestCommonTime(child, parent)
@@ -265,11 +310,11 @@ class BarkSlidebot:
         else:
             return None
 
-    ##  Enables joint contrains for robot.
-    #   @param self The object pointer.
+    ##  Enable joint constraints
+    #   Enables joint contrains for robot
     def enable_joint_constraints(self):
         '''
-        Enables joint contrains for robot.
+        Enables joint contrains for robot
         '''
         constraints = moveit_msgs.msg.Constraints()
         joint_constraint = moveit_msgs.msg.JointConstraint()
@@ -289,133 +334,138 @@ class BarkSlidebot:
 
         self.group.set_path_constraints(constraints)
 
-    ##  Disables joint contrains for robot.
-    #   @param self The object pointer.
+    ##  Disable joint constraints
+    #   Disables joint contrains for robot
     def disable_joint_constraints(self):
         '''
-        Disables joint contrains for robot.
+        Disables joint contrains for robot
         '''
         self.group.set_path_constraints(None)
 
-    ##  Gets image from Raspberry Pi camera.
-    #   @param self The object pointer.
-    #   @return The captured image.
+    ##  Get image
+    #   Gets image from Raspberry Pi camera
+    #   @return numpy array type captured image
     def get_image(self):
         '''
         Gets image from Raspberry Pi camera.
 
         Returns:
-            - (cv::Mat): OpenCV image. The captured image.
+            - (numpy array): OpenCV image. The captured image.
         '''
-        ## Instantiate the goal
+        # Instantiate the goal
         goal = RaspberryPiCameraGoal()
-        ## Send the goal and wait for the result
+        # Send the goal and wait for the result
         self.camera_client.send_goal(goal)
         self.camera_client.wait_for_result(rospy.Duration.from_sec(10.0))
 
         return self.bridge.imgmsg_to_cv2(self.camera_client.get_result().image, "bgr8")
 
-    ##  Gives the translation and orientation of child frame in parent frame.
-    #   @param image The image on which we want to calculate the orientation.
-    #   @return The angle between the bottom of the image and the box in degrees.
+    ##  Correct orientation
+    #   Gets the angle with which the end effector has to be rotated to align with the box
+    #   @param image numpy array type image on which we want to calculate the orientation
+    #   @return float type angle between the bottom of the image and the box in degrees
     def orient_correction(self, image):
         '''
-        Gives the translation and orientation of child frame in parent frame.
+        Gives the translation and orientation of child frame in parent frame
 
         Arguments:
-            - image (cv::Mat): OpenCV image. The image on which we want to calculate the orientation.
+            - image (numpy array): OpenCV image. The image on which we want to calculate the orientation
         
         Returns:
-            - (float32): angle between the bottom of the image and the box in degrees.
+            - (float): angle between the bottom of the image and the box in degrees
         '''
-        ## Instantiate the goal
+        # Instantiate the goal
         goal = OrientCorrectionGoal()
-        ## Convert OpenCV image to ROS image
+        # Convert OpenCV image to ROS image
         goal.image = self.bridge.cv2_to_imgmsg(image, encoding='bgr8')
-        ## Send the goal and wait for the result
+        # Send the goal and wait for the result
         self.orient_client.send_goal(goal)
         self.orient_client.wait_for_result(rospy.Duration.from_sec(5.0))
 
         return self.orient_client.get_result()
 
-    ##  Turns on or off the laser and sets its angle.
-    #   @param on Turn on or off the laser.
-    #   @param angle The angle of the laser.
+    ##  Send request to laser modul
+    #   Turns the laser on or off and sets its angle
+    #   @param on boolean type flag whether to turn the laser orn or off (True = on)
+    #   @param angle float type angle for the laser
     def laser_modul_request(self, on, angle):
         '''
-        Turns on or off the laser and sets its angle.
+        Turns on or off the laser and sets its angle
 
         Arguments:
-            - on (bool): turns on or off the laser.
-            - angle (float32): the angle of the laser.
+            - on (bool): flag whether to turn the laser orn or off (True = on)
+            - angle (float): the angle for the laser
         '''
-        ## Instantiate the goal
+        # Instantiate the goal
         goal = LaserModulGoal()
         goal.angle = angle
         goal.on = on
-        ## Send the goal and wait for the result
+        # Send the goal and wait for the result
         self.laser_modul_client.send_goal(goal)
         self.laser_modul_client.wait_for_result(rospy.Duration.from_sec(5.0))
 
         return None
 
-    ##  Detects the glass slides in the box.
-    #   @param img_no_laser Image without laser.
-    #   @param img_laser Image with laser.
-    #   @param bbox The bounding box parameters.
-    #   @return The poses of the slides.
+    ##  Detect glass slides
+    #   Detects the glass slides in the box
+    #   @param img_no_laser numpy array type image without laser on
+    #   @param img_laser numpy array type image without laser off
+    #   @param bbox vision_msgs/Detection2D type bounding box description
+    #   @return geometry_msgs/Pose2D[] type poses of the slides
     def slide_detection(self, img_no_laser, img_laser, bbox):
         '''
-        Detects the glass slides in the box.
+        Detects the glass slides in the box
 
         Arguments:
-            - img_no_laser (cv::Mat): OpenCV image without laser
-            - img_laser (cv::Mat): OpenCV image with laser
-            - bbox (geometry_msgs/Pose2D ): center, size_x and size_y of the bounding box
+            - img_no_laser (numpy array): OpenCV image without laser
+            - img_laser (numpy array): OpenCV image with laser
+            - bbox (vision_msgs/Detection2D): center, size_x and size_y of the bounding box
         
         Returns:
             - (geometry_msgs/Pose2D[]): poses of the slides
         '''
-        ## Instantiate the goal
+        # Instantiate the goal
         goal = SlideDetectionGoal()
         goal.bbox = bbox
-        ## Convert OpenCV images to ROS images
+        # Convert OpenCV images to ROS images
         goal.image_on = self.bridge.cv2_to_imgmsg(img_laser, encoding='bgr8')
         goal.image_off = self.bridge.cv2_to_imgmsg(img_no_laser, encoding='bgr8')
-        ## Send the goal and wait for the result
+        # Send the goal and wait for the result
         self.slide_detection_client.send_goal(goal)
         self.slide_detection_client.wait_for_result(rospy.Duration.from_sec(5.0))
 
         return self.slide_detection_client.get_result()
 
-    ##  Sets the digital I/O of robot.
-    #   @param pin The number of digital I/O.
-    #   @param state The value of digital I/O.
-    #   @return Returns True if the setting was successfull and returns False if it failed.
+    ##  Set the digital I/O of robot
+    #   Set the digital I/O of robot, Used for opening and closing the gripper
+    #   @param pin integer type number of digital I/O
+    #   @param state boolean type desired value of digital I/O
+    #   @return boolean type success value
     def set_io(self, pin, state):
         '''
-        Sets the digital I/O of robot.
+        Sets the digital I/O of robot
 
         Arguments:
             - pin (int): number of digital I/O
             - state (bool): value of digital I/O
         
         Returns:
-            - (bool): Returns True if the setting was successfull and returns False if it failed.
+            - (bool): Returns True if the setting was successfull and returns False if it failed
         '''
         if self.using_io_client:
             return self.set_io_client(1, pin, state)
         else:
             return False
 
-    ##  Moves the robot TCP relative.
-    #   @param xyz_relative_movement Relative movement of robot TCP.
+    ##  Move relative
+    #   Moves the robot TCP relative to current pose
+    #   @param xyz_relative_movement list type relative movement of robot TCP ([x,y,z]) in meters
     def move_relative(self, xyz_relative_movement):
         '''
         Moves the robot TCP relative.
 
         Arguments:
-            - xyz_relative_movement (list): relative movement of robot TCP
+            - xyz_relative_movement (list): relative movement of robot TCP ([x,y,z]) in meters
         '''
         waypoints = []
         start_pose = self.group.get_current_pose().pose
@@ -442,53 +492,53 @@ if __name__=="__main__":
     rospack = rospkg.RosPack()
     rospackage_root = rospack.get_path("bark_slidebot")
 
-    ## Instantiate BarkSlidebot class
+    # Instantiate BarkSlidebot class
     bark_slidebot = BarkSlidebot()
 
     input("-------------Moving to photo pose, press ENTER to continue!-------------")
     bark_slidebot.move_to_joint_pose("photo_jpose")
 
-    # ## Define a gripper covering box
+    # Define a gripper covering box
     # gripper_pose_stamped = geometry_msgs.msg.PoseStamped()
     # gripper_pose_stamped.header.frame_id = "tool0"
     # rospy.sleep(0.2)
     # gripper_pose_stamped.pose.position.z = 0.10
-    # ## Attach the gripper covering box to robot TCP
+    # Attach the gripper covering box to robot TCP
     # bark_slidebot.scene.attach_box("tool0", "gripper", gripper_pose_stamped, (0.2, 0.2, 0.2), touch_links=[])
 
-    # ## Read photo from file
+    # Read photo from file
     # img = cv2.imread(os.path.join(rospackage_root, '..', '4_Color.png'))
 
-    ## Get image in photo pose
+    # Get image in photo pose
     print("......Get image in photo pose, PLEASE WAIT!......")
     img = bark_slidebot.get_image()
     plt.imshow(img)
     plt.show()
 
-    ## Predict bounding box on image which was taken in the photo pose
+    # Predict bounding box on image which was taken in the photo pose
     print("......Bounding box prediction in progress, PLEASE WAIT!......")
     bbox_detection_result = bark_slidebot.bbox_prediction(img)
 
-    ## If there is at least one detected box
+    # If there is at least one detected box
     if not len(bbox_detection_result.detections.detections) == 0:
         bbox = bbox_detection_result.detections.detections[0].bbox
         print("------------Prediction was SUCCESSFULL!------------")
 
-        ## Draw bounding box
+        # Draw bounding box
         fig, ax = plt.subplots()
         ax.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         rect = patches.Rectangle((bbox.center.x - bbox.size_x/2, bbox.center.y - bbox.size_y/2), bbox.size_x, bbox.size_y, linewidth=2, edgecolor='r', facecolor='none')
         ax.add_patch(rect)
         plt.show()
 
-        ## Get camera hight
+        # Get camera hight
         camera_z = bark_slidebot.lookup_transform("base", "camera")[0][2]
 
-        ## Deporoject the center of the detected bounding box to 3D space. We get the result in robot base frame.
+        # Deporoject the center of the detected bounding box to 3D space. We get the result in robot base frame.
         deprojection_result = bark_slidebot.deproject_2d_points_to_3d([[bbox.center.x, bbox.center.y, camera_z]])
         bbox_centerpoint_3d = deprojection_result.points[0]
 
-        ## Place a coordinate system to the scene to visualize the location of holder box
+        # Place a coordinate system to the scene to visualize the location of holder box
         bbox_static_transform = geometry_msgs.msg.TransformStamped()
         bbox_static_transform.header.frame_id = 'base_link'
         bbox_static_transform.child_frame_id = 'predicted_object_pose'
@@ -498,10 +548,10 @@ if __name__=="__main__":
         bbox_static_transform.transform.rotation.w = 1
         bark_slidebot.static_tf_broadcaster.sendTransform(bbox_static_transform)
 
-        ## Define the camera above pose hight
+        # Define the camera above pose hight
         bbox_centerpoint_3d.z += 0.3
 
-        ## Calculate the above pose position and orientation
+        # Calculate the above pose position and orientation
         # rot = bark_slidebot.lookup_transform("base", "camera")[1]
         rot = [ -0.7071068, 0.7071068, 0, 0 ]
         above_pose = geometry_msgs.msg.PoseStamped()
@@ -509,26 +559,26 @@ if __name__=="__main__":
         above_pose.pose.position = bbox_centerpoint_3d
         above_pose.pose.orientation = geometry_msgs.msg.Quaternion(*rot)
 
-        ## Enable joint constraints, move the camera above the box, then disable joint constraits
+        # Enable joint constraints, move the camera above the box, then disable joint constraits
         bark_slidebot.enable_joint_constraints()
         bark_slidebot.move_to_pose_with_frame(above_pose)
         bark_slidebot.disable_joint_constraints()
 
-        ## Get image above the box
+        # Get image above the box
         print("......Get image above the box, PLEASE WAIT!......")
         img = bark_slidebot.get_image()
         fig, ax = plt.subplots()
         ax.imshow(img)
-        ## Display the center of the image
+        # Display the center of the image
         circle = plt.Circle((img.shape[1]/2, img.shape[0]/2), 5, color='r')
         ax.add_patch(circle)
         plt.show()
 
-        ## Get the angle which we want correct the orientation
+        # Get the angle which we want correct the orientation
         orient_correct_result = bark_slidebot.orient_correction(img)
         print("================== orient_angle: ",orient_correct_result)
        
-        ## Calculate the oriented pose position and orientation
+        # Calculate the oriented pose position and orientation
         oriented_pose = geometry_msgs.msg.PoseStamped()
         oriented_pose.header.frame_id = 'camera'
         trans, rot = bark_slidebot.lookup_transform("base", "camera")
@@ -537,7 +587,7 @@ if __name__=="__main__":
 
         orient_correct_result.angle += 90 # TODO: consider the transform between the camera and the gripper when specifying the angle
 
-        ## Check the rotating angle. If it is greather than 180 degrees, we get the (angle - 180) degrees.
+        # Check the rotating angle. If it is greather than 180 degrees, we get the (angle - 180) degrees.
         if abs(orient_correct_result.angle) > 180:
             if orient_correct_result.angle >= 0:
                 orient_correct_result.angle = orient_correct_result.angle % 180
@@ -549,30 +599,30 @@ if __name__=="__main__":
         oriented_pose.pose.orientation = geometry_msgs.msg.Quaternion(*q)
 
 
-        ## Enable joint constraints, rotate the robot around the camera axis to oriented pose, then disable joint constraits
+        # Enable joint constraints, rotate the robot around the camera axis to oriented pose, then disable joint constraits
         input("------------Moving to corrected orientation, press ENTER to continue!------------")
         bark_slidebot.enable_joint_constraints()
         bark_slidebot.move_to_pose_with_frame(oriented_pose)
         bark_slidebot.disable_joint_constraints()
 
-        ## Turn off the laser
+        # Turn off the laser
         bark_slidebot.laser_modul_request(False, 0)
 
-        ## Get image without laser line
+        # Get image without laser line
         print("......Get no laser image, PLEASE WAIT!......")
         img_no_laser = bark_slidebot.get_image()
         I_ff = Image.fromarray(img_no_laser)        
         fig, ax = plt.subplots()
         ax.imshow(img_no_laser)
-        ## Display the center of the image
+        # Display the center of the image
         circle = plt.Circle((img_no_laser.shape[1]/2, img_no_laser.shape[0]/2), 5, color='r')
         ax.add_patch(circle)
         plt.show()
 
-        ## Turn on the laser
+        # Turn on the laser
         bark_slidebot.laser_modul_request(True, 0)
 
-        ## Get image with laser line
+        # Get image with laser line
         print("......Get laser image, PLEASE WAIT!......")
         img_laser = bark_slidebot.get_image()
         plt.imshow(img_laser)
@@ -581,41 +631,41 @@ if __name__=="__main__":
         # I_on = Image.fromarray(img_laser)
         # I_on.save('/home/tirczkas/work/cap/on_0.png')
 
-        ## Turn off the laser
+        # Turn off the laser
         bark_slidebot.laser_modul_request(False, 0)
 
         input("------------Start slide detection, press ENTER to continue!------------")
-        ## Predict bounding box on image which was taken above the box and in the correct orientation
+        # Predict bounding box on image which was taken above the box and in the correct orientation
         box_detection_result = bark_slidebot.bbox_prediction(img_no_laser)
 
-        ## If there is a detected box
+        # If there is a detected box
         if not len(bbox_detection_result.detections.detections) == 0:
-            ## Get the parameters of the bounding box
+            # Get the parameters of the bounding box
             bbox_oriented = bbox_detection_result.detections.detections[0].bbox
 
-            ## Draw predicted bounding box
+            # Draw predicted bounding box
             fig, ax = plt.subplots()
             ax.imshow(cv2.cvtColor(img_no_laser, cv2.COLOR_BGR2RGB))
             rect = patches.Rectangle((bbox_oriented.center.x - bbox_oriented.size_x/2, bbox_oriented.center.y - bbox_oriented.size_y/2), bbox_oriented.size_x, bbox_oriented.size_y, linewidth=2, edgecolor='r', facecolor='none')
             ax.add_patch(rect)
             plt.show()
 
-            ## Detect slides in holder box
+            # Detect slides in holder box
             slide_poses = bark_slidebot.slide_detection(img_no_laser, img_laser, bbox_detection_result.detections.detections[0])
             slide_poses = slide_poses.poses
             
-            ## If there is at least one slide
+            # If there is at least one slide
             if not len(slide_poses) == 0:
                 print("------------Slide detection SUCCESSFULL!------------")
-                ## Select the slide from the middle of the list
+                # Select the slide from the middle of the list
                 selected_slide_index = int(len(slide_poses)/2)
 
-                ## Get camera hight
+                # Get camera hight
                 camera_z = bark_slidebot.lookup_transform("base", "camera")[0][2]
                 
-                ## Deporoject the middle point of the detected slide to 3D space. We get the result in robot base frame.
+                # Deporoject the middle point of the detected slide to 3D space. We get the result in robot base frame.
                 slide_deprojection_result = bark_slidebot.deproject_2d_points_to_3d([[slide_poses[selected_slide_index].x, slide_poses[selected_slide_index].y, camera_z]])
-                ## Get the middle point of the slide
+                # Get the middle point of the slide
                 slide_middlepoint_3d = slide_deprojection_result.points[0]
 
                 # plt.imshow(img_no_laser)
@@ -630,14 +680,14 @@ if __name__=="__main__":
                 # plt.title("Erre a pontra fog ráállni a robot")
                 # plt.show()
                 # fake_middle_point = geometry_msgs.msg.Point()
-                # # fake_middle_point.x = x_slide_center
-                # # fake_middle_point.y = y_slide_center
+                # fake_middle_point.x = x_slide_center
+                # fake_middle_point.y = y_slide_center
 
                 # z_slide_center = camera_z - 0.03
                 # slide_deprojection_result = bark_slidebot.deproject_2d_points_to_3d([[x_slide_center, y_slide_center, z_slide_center]])
                 # slide_middlepoint_3d = slide_deprojection_result.points[0]
 
-                ## Place a coordinate system to the scene to visualize the location of slide middle point
+                # Place a coordinate system to the scene to visualize the location of slide middle point
                 slide_middlepoint_static_transform = geometry_msgs.msg.TransformStamped()
                 slide_middlepoint_static_transform.header.frame_id = 'base_link'
                 slide_middlepoint_static_transform.child_frame_id = 'slide_middlepoint'
@@ -647,20 +697,20 @@ if __name__=="__main__":
                 slide_middlepoint_static_transform.transform.rotation = geometry_msgs.msg.Quaternion(*tf.transformations.quaternion_multiply([1,0,0,0], q))
                 bark_slidebot.static_tf_broadcaster.sendTransform(slide_middlepoint_static_transform)
 
-                ## Define the position of the tartget pose
+                # Define the position of the tartget pose
                 target_pose = geometry_msgs.msg.PoseStamped()
                 target_pose.header.frame_id = "tcp"
                 target_pose.pose.position = slide_middlepoint_3d # bbox_centerpoint_3d slide_middlepoint_3d
-                ## Go 10 cm above the slide with gripper 
+                # Go 10 cm above the slide with gripper 
                 target_pose.pose.position.z += 0.1
 
-                ## Define the orientation of the tartget pose
+                # Define the orientation of the tartget pose
                 rot = [ 0, 1, 0, 0 ]
                 q = tf.transformations.quaternion_about_axis(pi*((-orient_correct_result.angle)/180),  (0, 0, 1))
                 q = tf.transformations.quaternion_multiply(rot, q)
                 target_pose.pose.orientation = geometry_msgs.msg.Quaternion(*q)
 
-                ## Enable joint constraints, move to target pose with gripper, then disable joint constraits
+                # Enable joint constraints, move to target pose with gripper, then disable joint constraits
                 input("------------Move to pick pose, press ENTER to continue!------------")
                 bark_slidebot.enable_joint_constraints()
                 bark_slidebot.move_to_pose_with_frame(target_pose)
@@ -668,7 +718,7 @@ if __name__=="__main__":
 
                 distance = 0.03 # distance by which we move down in meter
 
-                ## Open the gripper
+                # Open the gripper
                 bark_slidebot.set_io(6, 1)
                 rospy.sleep(0.3)
                 bark_slidebot.set_io(7, 0)
@@ -676,27 +726,27 @@ if __name__=="__main__":
                 bark_slidebot.set_io(6, 0)
                 rospy.sleep(0.3)
 
-                ## Move down relatively with the set distance
+                # Move down relatively with the set distance
                 bark_slidebot.move_relative([0,0,-distance])
                 rospy.sleep(0.5)
                 
-                ## Close the gripper
+                # Close the gripper
                 input("------------Press ENTER to close the gripper!------------")
                 bark_slidebot.set_io(7, 1)
                 rospy.sleep(0.5)
                 bark_slidebot.set_io(7, 0)
 
-                ## Move up relatively with the set distance
+                # Move up relatively with the set distance
                 bark_slidebot.move_relative([0,0,distance])
 
             else:
-                ## If there is not detected slide
+                # If there is not detected slide
                 print("------------Slide detection FAILED!------------")
         
         else:
-            ## If there is not detected box in oriented pose
+            # If there is not detected box in oriented pose
             print("------------Oriented box prediction was FAILED!------------")
 
     else:
-        ## If there is not detected box in photot pose
+        # If there is not detected box in photot pose
         print("------------Photo pose prediction was FAILED!------------")
